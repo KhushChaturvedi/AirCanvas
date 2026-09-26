@@ -6,16 +6,12 @@
 //
 
 import SwiftUI
-import CoreData
 
 @main
-struct AirCanvasApp: App {
-    let persistenceController = PersistenceController.shared
-
-    var body: some Scene {
-        WindowGroup {
+struct AirCanvasApp: App{
+    var body: some Scene{
+        WindowGroup{
             ContentView()
-                .environment(\.managedObjectContext, persistenceController.container.viewContext)
         }
     }
 }

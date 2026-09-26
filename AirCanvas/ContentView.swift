@@ -6,81 +6,138 @@
 //
 
 import SwiftUI
-import CoreData
 
 struct ContentView: View {
-    @Environment(\.managedObjectContext) private var viewContext
+    @StateObject private var cameraManager = CameraManager()
+    @StateObject private var handTracker = HandTracker()
+    @StateObject private var drawingCanvas = DrawingCanvas()
 
-    @FetchRequest(
-        sortDescriptors: [NSSortDescriptor(keyPath: \Item.timestamp, ascending: true)],
-        animation: .default)
-    private var items: FetchedResults<Item>
+    @State private var canvasSize: CGSize = .zero
+    @State private var selectedColor: Color = .green
+
+    let palette: [Color] = [.green, .red, .blue, .yellow, .purple, .white]
 
     var body: some View {
-        NavigationView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp!, formatter: itemFormatter)")
-                    } label: {
-                        Text(item.timestamp!, formatter: itemFormatter)
+        ZStack {
+            CameraPreview(session: cameraManager.session)
+                .ignoresSafeArea()
+
+            GeometryReader { geometry in
+                ZStack {
+                    ForEach(0..<drawingCanvas.completedStrokes.count, id: \.self) { strokeIndex in
+                        let stroke = drawingCanvas.completedStrokes[strokeIndex]
+                        neonStroke(stroke.points, color: stroke.color, size: geometry.size, smooth: false)
+                    }
+
+                    neonStroke(drawingCanvas.currentStroke, color: selectedColor, size: geometry.size, smooth: true)
+                }
+                .onAppear {
+                    canvasSize = geometry.size
+                }
+                .onChange(of: geometry.size) { _, newSize in
+                    canvasSize = newSize
+                }
+            }
+            .allowsHitTesting(false)
+
+            VStack {
+                Spacer()
+                HStack(spacing: 16) {
+                    ForEach(palette, id: \.self) { color in
+                        colorCircle(color)
                     }
                 }
-                .onDelete(perform: deleteItems)
+                .padding()
+                .background(.ultraThinMaterial)
+                .clipShape(Capsule())
+                .padding(.bottom, 30)
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
-                    }
-                }
+        }
+        .onAppear {
+            cameraManager.handTracker = handTracker
+            drawingCanvas.currentColor = selectedColor
+            cameraManager.start()
+        }
+        .onChange(of: handTracker.isPinching) { _, isPinching in
+            if !isPinching {
+                drawingCanvas.endStroke(size: canvasSize)
             }
-            Text("Select an item")
+        }
+        .onChange(of: handTracker.indexTip) { _, newIndexTip in
+            if handTracker.isPinching, let tip = newIndexTip {
+                drawingCanvas.addPoint(tip)
+            }
+        }
+        .onChange(of: handTracker.isOpenPalm) { _, isOpen in
+            if isOpen {
+                drawingCanvas.clear()
+            }
         }
     }
 
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(context: viewContext)
-            newItem.timestamp = Date()
+    func colorCircle(_ color: Color) -> some View {
+        let isSelected = selectedColor == color
+        let ringWidth: CGFloat = isSelected ? 3 : 0
 
-            do {
-                try viewContext.save()
-            } catch {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-                let nsError = error as NSError
-                fatalError("Unresolved error \(nsError), \(nsError.userInfo)")
+        return Circle()
+            .fill(color)
+            .frame(width: 36, height: 36)
+            .overlay(
+                Circle().stroke(Color.white, lineWidth: ringWidth)
+            )
+            .onTapGesture {
+                selectedColor = color
+                drawingCanvas.currentColor = color
             }
-        }
     }
 
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            offsets.map { items[$0] }.forEach(viewContext.delete)
+    @ViewBuilder
+    func neonStroke(_ stroke: [CGPoint], color: Color, size: CGSize, smooth: Bool) -> some View {
+        Path { path in
+            drawStroke(stroke, in: &path, size: size, smooth: smooth)
+        }
+        .stroke(color, lineWidth: 10)
+        .blur(radius: 12)
+        .opacity(0.8)
 
-            do {
-                try viewContext.save()
-            } catch {
-                // Replace this implementation with code to handle the error appropriately.
-                // fatalError() causes the application to generate a crash log and terminate. You should not use this function in a shipping application, although it may be useful during development.
-                let nsError = error as NSError
-                fatalError("Unresolved error \(nsError), \(nsError.userInfo)")
+        Path { path in
+            drawStroke(stroke, in: &path, size: size, smooth: smooth)
+        }
+        .stroke(color, lineWidth: 5)
+        .blur(radius: 4)
+
+        Path { path in
+            drawStroke(stroke, in: &path, size: size, smooth: smooth)
+        }
+        .stroke(Color.white, lineWidth: 2)
+    }
+
+    func drawStroke(_ stroke: [CGPoint], in path: inout Path, size: CGSize, smooth: Bool) {
+        guard let first = stroke.first else {
+            return
+        }
+
+        let points = stroke.map { CGPoint(x: $0.x * size.width, y: $0.y * size.height) }
+
+        path.move(to: points[0])
+
+        if !smooth || points.count < 3 {
+            for point in points.dropFirst() {
+                path.addLine(to: point)
             }
+            return
+        }
+
+        for i in 1..<points.count - 1 {
+            let midPoint = CGPoint(
+                x: (points[i].x + points[i + 1].x) / 2,
+                y: (points[i].y + points[i + 1].y) / 2
+            )
+            path.addQuadCurve(to: midPoint, control: points[i])
         }
     }
 }
-
-private let itemFormatter: DateFormatter = {
-    let formatter = DateFormatter()
-    formatter.dateStyle = .short
-    formatter.timeStyle = .medium
-    return formatter
-}()
 
 #Preview {
-    ContentView().environment(\.managedObjectContext, PersistenceController.preview.container.viewContext)
-}
+    ContentView()
+}n
